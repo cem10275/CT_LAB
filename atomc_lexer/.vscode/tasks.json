@@ -1,0 +1,53 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Build Lexer",
+            "type": "shell",
+            "command": "gcc",
+            "args": [
+                "-Wall",
+                "-Wextra",
+                "-std=c99",
+                "-g",
+                "-o",
+                "lexer",
+                "lexer.c"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": ["$gcc"],
+            "detail": "Build the AtomC lexical analyzer"
+        },
+        {
+            "label": "Run on selected test",
+            "type": "shell",
+            "command": "${workspaceFolder}/lexer",
+            "args": ["tests/${input:testNumber}.c"],
+            "group": "test",
+            "dependsOn": "Build Lexer",
+            "problemMatcher": [],
+            "detail": "Run the lexer on a chosen test file"
+        },
+        {
+            "label": "Run all tests",
+            "type": "shell",
+            "command": "make",
+            "args": ["test"],
+            "group": "test",
+            "problemMatcher": [],
+            "detail": "Run the lexer on every test file"
+        }
+    ],
+    "inputs": [
+        {
+            "id": "testNumber",
+            "type": "pickString",
+            "description": "Select test file",
+            "options": ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"],
+            "default": "0"
+        }
+    ]
+}

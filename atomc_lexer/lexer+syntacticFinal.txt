@@ -1,0 +1,1183 @@
+#include <ctype.h>
+#include <stdarg.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#define SAFEALLOC(var, Type) \
+    if (((var) = (Type *)malloc(sizeof(Type))) == NULL) \
+    err("not enough memory") // alocam memorie pentru un token și verifică dacă alocarea a reușit. Dacă nu, afisam eroare și oprim programul
+
+enum { // definim codurile tokenilor pe care lexerul le poate recunoaste
+    ID,
+    BREAK,
+    CHAR,
+    DOUBLE,
+    ELSE,
+    FOR,
+    IF,
+    INT,
+    RETURN,
+    STRUCT,
+    VOID,
+    WHILE,
+    CT_INT,
+    CT_REAL,
+    CT_CHAR,
+    CT_STRING,
+    COMMA,
+    SEMICOLON,
+    LPAR,
+    RPAR,
+    LBRACKET,
+    RBRACKET,
+    LACC,
+    RACC,
+    END,
+    ADD,
+    SUB,
+    MUL,
+    DIV,
+    DOT,
+    AND,
+    OR,
+    NOT,
+    ASSIGN,
+    EQUAL,
+    NOTEQ,
+    LESS,
+    LESSEQ,
+    GREATER,
+    GREATEREQ,
+    SPACE,
+    LINECOMMENT
+}; // token codes
+
+typedef struct _Token { // definim cum arata un token în memorie
+    int code;
+    union {
+        char *text;
+        long int i;
+        double r;
+    };
+    int line;
+    struct _Token *next;
+} Token;
+
+static Token *tokens = NULL;
+static Token *lastToken = NULL;
+static Token *consumedToken= NULL;
+static int line = 1;
+static const char *pCrtCh = NULL;
+
+static void err(const char *fmt, ...) // afisam o eroare generală și oprim programul
+{
+    va_list va;
+    va_start(va, fmt);
+    fprintf(stderr, "error: ");
+    vfprintf(stderr, fmt, va);
+    fputc('\n', stderr);
+    va_end(va);
+    exit(-1);
+}
+
+static Token *addTk(int code) // adaugam tokeni în listă
+{
+    Token *tk;
+    SAFEALLOC(tk, Token);
+    tk->code = code;
+    tk->line = line;
+    tk->next = NULL;
+    if (lastToken) {
+        lastToken->next = tk;
+    } else {
+        tokens = tk;
+    }
+    lastToken = tk;
+    return tk;
+}
+
+int consume(int code) // pt. parser nu pt. lexer // verificam dacă tokenul curent are un anumit cod și avansam dacă se potriveste
+{ 
+    if(lastToken->code==code){ 
+    consumedToken=lastToken; 
+    lastToken=lastToken->next; 
+    return 1; 
+} 
+return 0; 
+} 
+
+static void tkerr(const Token *tk, const char *fmt, ...) // este ca err, dar afisează si linia unde apare problema
+{
+    va_list va;
+    va_start(va, fmt);
+    fprintf(stderr, "error in line %d: ", tk->line);
+    vfprintf(stderr, fmt, va);
+    fputc('\n', stderr);
+    va_end(va);
+    exit(-1);
+} 
+
+static char *createString(const char *start, const char *end) // copiam o bucata din input într-un string nou
+{
+    size_t n = (size_t)(end - start);
+    char *s = (char *)malloc(n + 1);
+    if (s == NULL) {
+        err("not enough memory");
+    }
+    memcpy(s, start, n);
+    s[n] = '\0';
+    return s;
+}
+
+static int getNextToken(void) // implementam FSM-ul. In funcție de state și de caracterul curent,
+{                             // consumă caractere și ajunge într-o stare finală unde se creează tokenul
+    int state = 0; // aici lexerul decide ce fel de token începe
+    char ch;
+    const char *pStartCh = NULL;
+    Token *tk;
+    long int charVal = 0;
+
+    while (1) {
+        ch = *pCrtCh;
+        switch (state) {
+        case 0: // initial state
+            if (isalpha((unsigned char)ch) || ch == '_') { // daca primul caracter e literă sau _, poate fi ID sau keyword
+                pStartCh = pCrtCh;
+                pCrtCh++;
+                state = 21; // identifier
+            } else if (ch == '0') { // daca numărul începe cu 0, merg într-o stare separată fiindcă poate fi zero simplu, hex, real sau exponent
+                pStartCh = pCrtCh;
+                pCrtCh++;
+                state = 1; // number starting with 0
+            } else if (ch >= '1' && ch <= '9') { // daca începe cu 1-9, este început de constantă numerica
+                pStartCh = pCrtCh;
+                pCrtCh++;
+                state = 3; // decimal number
+            } else if (ch == '\'') {
+                pCrtCh++;
+                state = 14; // CT_CHAR
+            } else if (ch == '"') {
+                pStartCh = pCrtCh + 1;
+                pCrtCh++;
+                state = 19; // CT_STRING body
+            } else if (ch == ',') {       // state 23: COMMA
+                pCrtCh++;
+                addTk(COMMA);
+                return COMMA;
+            } else if (ch == ';') {       // state 24: SEMICOLON
+                pCrtCh++;
+                addTk(SEMICOLON);
+                return SEMICOLON;
+            } else if (ch == '(') {       // state 25: LPAR
+                pCrtCh++;
+                addTk(LPAR);
+                return LPAR;
+            } else if (ch == ')') {       // state 26: RPAR
+                pCrtCh++;
+                addTk(RPAR);
+                return RPAR;
+            } else if (ch == '[') {       // state 27: LBRACKET
+                pCrtCh++;
+                addTk(LBRACKET);
+                return LBRACKET;
+            } else if (ch == ']') {       // state 28: RBRACKET
+                pCrtCh++;
+                addTk(RBRACKET);
+                return RBRACKET;
+            } else if (ch == '{') {       // state 29: LACC
+                pCrtCh++;
+                addTk(LACC);
+                return LACC;
+            } else if (ch == '}') {       // state 30: RACC
+                pCrtCh++;
+                addTk(RACC);
+                return RACC;
+            } else if (ch == '+') {       // state 57: ADD
+                pCrtCh++;
+                addTk(ADD);
+                return ADD;
+            } else if (ch == '-') {       // state 56: SUB
+                pCrtCh++;
+                addTk(SUB);
+                return SUB;
+            } else if (ch == '*') {       // state 55: MUL
+                pCrtCh++;
+                addTk(MUL);
+                return MUL;
+            } else if (ch == '/') {
+                pCrtCh++;
+                state = 36; // DIV or LINECOMMENT
+            } else if (ch == '.') {
+                pCrtCh++;
+                addTk(DOT);
+                return DOT;
+            } else if (ch == '&') {
+                pCrtCh++;
+                state = 53; // AND
+            } else if (ch == '|') {
+                pCrtCh++;
+                state = 51; // OR
+            } else if (ch == '!') {
+                pCrtCh++;
+                state = 46; // NOT or NOTEQ
+            } else if (ch == '=') {
+                pCrtCh++;
+                state = 42; // ASSIGN or EQUAL
+            } else if (ch == '<') {
+                pCrtCh++;
+                state = 45; // LESS or LESSEQ
+            } else if (ch == '>') {
+                pCrtCh++;
+                state = 39; // GREATER or GREATEREQ
+            } else if (ch == ' ' || ch == '\r' || ch == '\t' || ch == '\n') {
+                if (ch == '\n') line++;
+                pCrtCh++;
+                state = 35; // SPACE
+            } else if (ch == '\0') {      // state 33: END
+                addTk(END);
+                return END;
+            } else {
+                tkerr(addTk(END), "invalid character `%c`", ch);
+            }
+            break;
+
+        // Number starting with 0 (state 1) 
+        case 1:
+            if (ch == 'x' || ch == 'X') {
+                pCrtCh++;
+                state = 2; // hex digits
+            } else if (ch >= '0' && ch <= '7') {
+                pCrtCh++;
+                state = 3; // octal/decimal digits
+            } else if (ch == '.') {
+                pCrtCh++;
+                state = 5; // fractional part
+            } else if (ch == 'e' || ch == 'E') {
+                pCrtCh++;
+                state = 10; // exponent from integer
+            } else { // state 4: CT_INT
+                tk = addTk(CT_INT);
+                tk->i = 0;
+                return CT_INT;
+            }
+            break;
+
+        // Hex digits after 0x (state 2) 
+        case 2:
+            if (isdigit((unsigned char)ch) || (ch >= 'a' && ch <= 'f') ||
+                (ch >= 'A' && ch <= 'F')) {
+                pCrtCh++;
+            } else { // state 4: CT_INT
+                tk = addTk(CT_INT);
+                tk->i = strtol(pStartCh, NULL, 16); // ramura pentru hexazecimal - baza 16 (transforma text din ex. 0xC in val. numerica)
+                return CT_INT;
+            }
+            break;
+
+        // Decimal/octal digits (state 3) 
+        case 3: // starea 3 citește numere întregi zecimale. Dacă apare punct sau exponent, trece pe ramura de CT_REAL
+            if (isdigit((unsigned char)ch)) {
+                pCrtCh++;
+            } else if (ch == '.') {
+                pCrtCh++;
+                state = 5; // fractional part
+            } else if (ch == 'e' || ch == 'E') {
+                pCrtCh++;
+                state = 10; // exponent from integer
+            } else { // state 4: CT_INT
+                tk = addTk(CT_INT);
+                tk->i = strtol(pStartCh, NULL, 10);
+                return CT_INT;
+            }
+            break;
+
+        // After '.' in number (state 5) 
+        case 5: // după punct, regula cere cel puțin o cifră. Dacă nu apare cifră, dau eroare
+            if (isdigit((unsigned char)ch)) {
+                pCrtCh++;
+                state = 6; // fractional digits
+            } else {
+                tkerr(addTk(END), "invalid real constant");
+            }
+            break;
+
+        // Fractional digits (state 6) 
+        case 6: // starea 6 citește cifrele de după punct. Dacă apare exponent, continuă; altfel creează CT_REAL
+            if (isdigit((unsigned char)ch)) {
+                pCrtCh++;
+            } else if (ch == 'e' || ch == 'E') {
+                pCrtCh++;
+                state = 7; // exponent from fractional
+            } else { // state 13: CT_REAL
+                tk = addTk(CT_REAL);
+                tk->r = strtod(pStartCh, NULL); //strtod transforma textul de ex. 2e0 in val. numerica 2.0
+                return CT_REAL;
+            }
+            break;
+
+        // After 'e'/'E' from fractional (state 7)
+		// starile 7, 8 și 9 tratează exponentul pentru un real cu punct. După e poate exista semn, dar apoi trebuie obligatoriu cifre 
+        case 7:
+            if (ch == '+' || ch == '-') {
+                pCrtCh++;
+                state = 8;
+            } else if (isdigit((unsigned char)ch)) {
+                pCrtCh++;
+                state = 9;
+            } else {
+                tkerr(addTk(END), "invalid real constant (exponent)");
+            }
+            break;
+
+        // After sign in exponent from fractional (state 8) 
+        case 8:
+            if (isdigit((unsigned char)ch)) {
+                pCrtCh++;
+                state = 9;
+            } else {
+                tkerr(addTk(END), "invalid real constant (exponent)");
+            }
+            break;
+
+        // Exponent digits from fractional (state 9) 
+        case 9:
+            if (isdigit((unsigned char)ch)) {
+                pCrtCh++;
+            } else { // state 13: CT_REAL
+                tk = addTk(CT_REAL);
+                tk->r = strtod(pStartCh, NULL);
+                return CT_REAL;
+            }
+            break;
+
+        // After 'e'/'E' from integer (state 10)
+		// starile 10, 11 și 12 tratează realii fără punct, dar cu exponent, de forma 12e3 
+        case 10:
+            if (ch == '+' || ch == '-') {
+                pCrtCh++;
+                state = 11;
+            } else if (isdigit((unsigned char)ch)) {
+                pCrtCh++;
+                state = 12;
+            } else {
+                tkerr(addTk(END), "invalid real constant (exponent)");
+            }
+            break;
+
+        // After sign in exponent from integer (state 11) 
+        case 11:
+            if (isdigit((unsigned char)ch)) {
+                pCrtCh++;
+                state = 12;
+            } else {
+                tkerr(addTk(END), "invalid real constant (exponent)");
+            }
+            break;
+
+        // Exponent digits from integer (state 12) 
+        case 12:
+            if (isdigit((unsigned char)ch)) {
+                pCrtCh++;
+            } else { // state 13: CT_REAL
+                tk = addTk(CT_REAL);
+                tk->r = strtod(pStartCh, NULL);
+                return CT_REAL;
+            }
+            break;
+
+        // CT_CHAR: after opening quote (state 14)
+		// starea 14 citește conținutul constantei caracter. Dacă vede backslash, merge pe ramura de escape 
+        case 14:
+            if (ch == '\\') {
+                pCrtCh++;
+                state = 16; // escape sequence
+            } else if (ch != '\'' && ch != '\0') {
+                charVal = (unsigned char)ch;
+                pCrtCh++;
+                state = 15; // got char value
+            } else {
+                tkerr(addTk(END), "invalid char constant");
+            }
+            break;
+
+        // CT_CHAR: got char value (state 15)
+		// starea 15 verifică apostroful de închidere și apoi creează tokenul CT_CHAR cu valoarea caracterului.
+        case 15:
+            if (ch == '\'') { // state 17: CT_CHAR
+                pCrtCh++;
+                tk = addTk(CT_CHAR);
+                tk->i = charVal;
+                return CT_CHAR;
+            } else {
+                tkerr(addTk(END), "missing closing quote for char constant");
+            }
+            break;
+
+        // CT_CHAR: escape sequence (state 16)
+		// starea 16 tratează escape sequences pentru caractere
+        case 16:
+            if (ch != '\0') {
+                switch (ch) {
+                case 'n': charVal = '\n'; break;
+                case 't': charVal = '\t'; break;
+                case '\\': charVal = '\\'; break;
+                case '\'': charVal = '\''; break;
+                case '0': charVal = '\0'; break;
+                case 'r': charVal = '\r'; break;
+                case 'a': charVal = '\a'; break;
+                case 'b': charVal = '\b'; break;
+                default: charVal = (unsigned char)ch; break;
+                }
+                pCrtCh++;
+                state = 15; // got escaped char value
+            } else {
+                tkerr(addTk(END), "invalid escape in char constant");
+            }
+            break;
+
+        // CT_STRING: escape in string (state 18)
+		// starea 18 tratează escape-ul în string, ca ghilimelele escapate să nu închidă stringul
+        case 18:
+            if (ch != '\0') {
+                pCrtCh++;
+                state = 19; // back to string body
+            } else {
+                tkerr(addTk(END), "unterminated string constant");
+            }
+            break;
+
+        // CT_STRING: string body (state 19)
+		// starea 19 citește conținutul stringului până la ghilimeaua de închidere
+        case 19:
+            if (ch == '\\') {
+                pCrtCh++;
+                state = 18; // escape in string
+            } else if (ch == '"') { // state 20: CT_STRING
+                tk = addTk(CT_STRING);
+                tk->text = createString(pStartCh, pCrtCh);
+                pCrtCh++;
+                return CT_STRING;
+            } else if (ch == '\0') {
+                tkerr(addTk(END), "unterminated string constant");
+            } else {
+                pCrtCh++;
+            }
+            break;
+
+        // Identifier (state 21)
+		// Starea 21 citește identificatori. După ce lexemul se termină, îl compar cu lista de keyword-uri. 
+		// Dacă nu este keyword, creez tokenul ID și salvez textul
+        case 21:
+            if (isalnum((unsigned char)ch) || ch == '_') {
+                pCrtCh++;
+            } else { // state 22: emit ID or keyword
+                int nCh = (int)(pCrtCh - pStartCh);
+                if (nCh == 5 && !memcmp(pStartCh, "break", 5)) tk = addTk(BREAK);
+                else if (nCh == 4 && !memcmp(pStartCh, "char", 4)) tk = addTk(CHAR);
+                else if (nCh == 6 && !memcmp(pStartCh, "double", 6)) tk = addTk(DOUBLE);
+                else if (nCh == 4 && !memcmp(pStartCh, "else", 4)) tk = addTk(ELSE);
+                else if (nCh == 3 && !memcmp(pStartCh, "for", 3)) tk = addTk(FOR);
+                else if (nCh == 2 && !memcmp(pStartCh, "if", 2)) tk = addTk(IF);
+                else if (nCh == 3 && !memcmp(pStartCh, "int", 3)) tk = addTk(INT);
+                else if (nCh == 6 && !memcmp(pStartCh, "return", 6)) tk = addTk(RETURN);
+                else if (nCh == 6 && !memcmp(pStartCh, "struct", 6)) tk = addTk(STRUCT);
+                else if (nCh == 4 && !memcmp(pStartCh, "void", 4)) tk = addTk(VOID);
+                else if (nCh == 5 && !memcmp(pStartCh, "while", 5)) tk = addTk(WHILE);
+                else {
+                    tk = addTk(ID);
+                    tk->text = createString(pStartCh, pCrtCh);
+                }
+                return tk->code;
+            }
+            break;
+
+        // SPACE (state 35) - consume whitespace, no token emitted
+		// starea 35 consumă whitespace-ul. Nu se generează token, doar se actualizează linia pentru newline
+        case 35:
+            if (ch == ' ' || ch == '\r' || ch == '\t' || ch == '\n') {
+                if (ch == '\n') line++;
+                pCrtCh++;
+            } else {
+                state = 0; // back to initial
+            }
+            break;
+
+        // DIV or LINECOMMENT (state 36)
+		// starea 36 decide între operatorul / și comentariul //
+        case 36:
+            if (ch == '/') {
+                pCrtCh++;
+                state = 37; // line comment body
+            } else { // state 36: DIV
+                addTk(DIV);
+                return DIV;
+            }
+            break;
+
+        // Line comment body (state 37) 
+		// starea 37 consumă tot comentariul de linie și apoi revine la starea inițiala
+        case 37:
+            if (ch == '\n' || ch == '\r' || ch == '\0') {
+                state = 0; // state 38: done with comment
+            } else {
+                pCrtCh++;
+            }
+            break;
+
+        // After '>' (state 39) 
+		// daca după > vine =, produce GREATEREQ. Altfel produce GREATER
+        case 39: 
+            if (ch == '=') { // state 41: GREATEREQ
+                pCrtCh++;
+                addTk(GREATEREQ);
+                return GREATEREQ;
+            } else { // state 40: GREATER
+                addTk(GREATER);
+                return GREATER;
+            }
+
+        // After '=' (state 42) 
+		// dacă după = vine =, produce EQUAL. Altfel produce ASSIGN
+        case 42:
+            if (ch == '=') { // state 48: EQUAL
+                pCrtCh++;
+                addTk(EQUAL);
+                return EQUAL;
+            } else { // state 49: ASSIGN
+                addTk(ASSIGN);
+                return ASSIGN;
+            }
+
+        // After '<' (state 45) 
+        case 45:
+            if (ch == '=') { // state 44: LESSEQ
+                pCrtCh++;
+                addTk(LESSEQ);
+                return LESSEQ;
+            } else { // state 43: LESS
+                addTk(LESS);
+                return LESS;
+            }
+
+        // After '!' (state 46)
+        case 46:
+            if (ch == '=') { // state 50: NOTEQ
+                pCrtCh++;
+                addTk(NOTEQ);
+                return NOTEQ;
+            } else { // state 47: NOT
+                addTk(NOT);
+                return NOT;
+            }
+
+        // After '|' (state 51) 
+		// dupa | trebuie să mai fie un |
+        case 51:
+            if (ch == '|') { // state 52: OR
+                pCrtCh++;
+                addTk(OR);
+                return OR;
+            } else {
+                tkerr(addTk(END), "expected '||'");
+            }
+            break;
+
+        // After '&' (state 53) 
+		// dupa & trebuie să mai fie un &
+		// aceste stări sunt pentru operatori care au prefix comun. După primul caracter trebuie să verific dacă urmează = 
+        // sau al doilea caracter logic
+		case 53:
+            if (ch == '&') { // state 54: AND
+                pCrtCh++;
+                addTk(AND);
+                return AND;
+            } else {
+                tkerr(addTk(END), "expected '&&'");
+            }
+            break;
+        }
+    }
+}
+
+static const char *tokenName(int code) // folosim doar pentru afișare, ca să vedem numele tokenului, nu doar codul numeric
+{
+    switch (code) {
+    case ID:        return "ID";
+    case BREAK:     return "BREAK";
+    case CHAR:      return "CHAR";
+    case DOUBLE:    return "DOUBLE";
+    case ELSE:      return "ELSE";
+    case FOR:       return "FOR";
+    case IF:        return "IF";
+    case INT:       return "INT";
+    case RETURN:    return "RETURN";
+    case STRUCT:    return "STRUCT";
+    case VOID:      return "VOID";
+    case WHILE:     return "WHILE";
+    case CT_INT:    return "CT_INT";
+    case CT_REAL:   return "CT_REAL";
+    case CT_CHAR:   return "CT_CHAR";
+    case CT_STRING: return "CT_STRING";
+    case COMMA:     return "COMMA";
+    case SEMICOLON: return "SEMICOLON";
+    case LPAR:      return "LPAR";
+    case RPAR:      return "RPAR";
+    case LBRACKET:  return "LBRACKET";
+    case RBRACKET:  return "RBRACKET";
+    case LACC:      return "LACC";
+    case RACC:      return "RACC";
+    case END:       return "END";
+    case ADD:       return "ADD";
+    case SUB:       return "SUB";
+    case MUL:       return "MUL";
+    case DIV:       return "DIV";
+    case DOT:       return "DOT";
+    case AND:       return "AND";
+    case OR:        return "OR";
+    case NOT:       return "NOT";
+    case ASSIGN:    return "ASSIGN";
+    case EQUAL:     return "EQUAL";
+    case NOTEQ:     return "NOTEQ";
+    case LESS:      return "LESS";
+    case LESSEQ:    return "LESSEQ";
+    case GREATER:   return "GREATER";
+    case GREATEREQ: return "GREATEREQ";
+    default:        return "UNKNOWN";
+    }
+}
+
+static void showTokens(void) // afisam lista de tokeni și atributele lor
+{
+    Token *tk;
+    for (tk = tokens; tk; tk = tk->next) {
+        printf("line %d: %s", tk->line, tokenName(tk->code));
+        if (tk->code == ID) {
+            printf(":%s", tk->text);
+        } else if (tk->code == CT_INT) {
+            printf(":%ld", tk->i);  //arata val. numerica finala
+        } else if (tk->code == CT_REAL) {
+            printf(":%g", tk->r);
+        } else if (tk->code == CT_CHAR) {
+            printf(":%c", (char)tk->i);
+        } else if (tk->code == CT_STRING) {
+            printf(":%s", tk->text);
+        }
+        printf("\n");
+    }
+}
+
+// Acestea sunt prototipurile pentru funcțiile parserului. Fiecare funcție corespunde unei reguli din gramatică.
+// Sunt necesare pentru că funcțiile se apelează între ele. De exemplu stm() poate apela expr(), iar expr() poate apela exprAssign()
+int expr(void);
+int exprAssign(void);
+int exprOr(void);       int exprOr1(void);
+int exprAnd(void);      int exprAnd1(void);
+int exprEq(void);       int exprEq1(void);
+int exprRel(void);      int exprRel1(void);
+int exprAdd(void);      int exprAdd1(void);
+int exprMul(void);      int exprMul1(void);
+int exprCast(void);
+int exprUnary(void);
+int exprPostfix(void);  int exprPostfix1(void);
+int exprPrimary(void);
+int stm(void);
+int stmCompound(void);
+int typeBase(void);
+int arrayDecl(void);
+int varDef(void);
+int fnParam(void);
+int fnDef(void);
+int structDef(void);
+int unit(void);
+
+// typeBase: INT | DOUBLE | CHAR | STRUCT ID
+// Verifică dacă tokenii curenți formează un tip de bază
+// Dacă vede INT, DOUBLE sau CHAR, returnează 1
+// Dacă vede STRUCT, trebuie să urmeze ID
+int typeBase()
+{
+    Token *startTk = lastToken;
+    if (consume(INT)) return 1;
+    if (consume(DOUBLE)) return 1;
+    if (consume(CHAR)) return 1;
+    if (consume(STRUCT)) {
+        if (consume(ID)) return 1;
+        else tkerr(lastToken, "missing identifier after struct");
+    }
+    lastToken = startTk;
+    return 0;
+}
+
+// arrayDecl: LBRACKET CT_INT? RBRACKET
+// arrayDecl verifică parantezele pătrate pentru vector, cu dimensiune opțională
+// CT_INT? înseamnă că numărul este opțional
+int arrayDecl()
+{
+    Token *startTk = lastToken;
+    if (consume(LBRACKET)) {
+        consume(CT_INT); // optional
+        if (consume(RBRACKET)) return 1;
+        else tkerr(lastToken, "missing ] in array declaration");
+    }
+    lastToken = startTk;
+    return 0;
+}
+
+// varDef verifică o declarație de variabilă
+// varDef: typeBase ID arrayDecl? SEMICOLON = conform gramaticii AtomC din laborator, o declarație de variabilă are un singur ID, nu listă cu virgulă
+// varDef esueaza, apoi stmCompound  zice nu mai pot recunoaște nici declarație, nici statement. Acum ar trebui să urmeze }
+// de aceea apare: "error in line 3: missing } or syntax error" in cazul testelor 0.c, 5.c, 6.c, 7.c
+int varDef()
+{
+    Token *startTk = lastToken;
+    if (typeBase()) {
+        if (consume(ID)) {
+            arrayDecl(); // optional
+            if (consume(SEMICOLON)) return 1;
+        }
+        lastToken = startTk;
+    }
+    return 0;
+}
+
+// fnParam: typeBase ID arrayDecl?
+// fnParam verifică parametrii funcțiilor
+int fnParam()
+{
+    Token *startTk = lastToken;
+    if (typeBase()) {
+        if (consume(ID)) {
+            arrayDecl();
+            return 1;
+        }
+        lastToken = startTk;
+    }
+    return 0;
+}
+
+// structDef: STRUCT ID LACC varDef* RACC SEMICOLON
+// structDef verifică definiția unei structuri
+int structDef()
+{
+    Token *startTk = lastToken;
+    if (consume(STRUCT)) {
+        if (consume(ID)) {
+            if (consume(LACC)) {
+                while (varDef()) {} // cât timp pot recunoaște declarații de variabile în structură, le citesc
+                if (consume(RACC)) { // după ce varDef() nu mai merge, parserul se așteaptă să vadă }, dar vede altceva si da eroare ca la testul 9.c
+                    if (consume(SEMICOLON)) return 1;
+                    else tkerr(lastToken, "missing ; after struct definition");
+                } else tkerr(lastToken, "missing } in struct definition");
+            }
+        }
+        lastToken = startTk;
+    }
+    return 0;
+}
+
+// fnDef: ( typeBase | VOID ) ID LPAR ( fnParam ( COMMA fnParam )* )? RPAR stmCompound
+// fnDef verifică definiția unei funcții: tip de returnare, nume, parametri și corp
+int fnDef()
+{
+    Token *startTk = lastToken;
+    if (typeBase() || consume(VOID)) {
+        if (consume(ID)) {
+            if (consume(LPAR)) {
+                if (fnParam()) {
+                    while (consume(COMMA)) {
+                        if (!fnParam()) tkerr(lastToken, "missing parameter after ,");
+                    }
+                }
+                if (consume(RPAR)) {
+                    if (stmCompound()) return 1;
+                    else tkerr(lastToken, "missing function body");
+                } else tkerr(lastToken, "missing ) in function definition");
+            }
+        }
+        lastToken = startTk;
+    }
+    return 0;
+}
+
+// stmCompound: LACC ( varDef | stm )* RACC = deci după {, parserul încearcă repetat să recunoască ori vardef ori stm
+// stmCompound verifică un bloc de cod între acolade
+int stmCompound()
+{
+    Token *startTk = lastToken;
+    if (consume(LACC)) {
+        while (1) {
+            if (varDef()) {}
+            else if (stm()) {}
+            else break;
+        }
+        if (consume(RACC)) return 1;
+        else tkerr(lastToken, "missing } or syntax error");
+    }
+    lastToken = startTk;
+    return 0;
+}
+
+// stm: stmCompound
+//    | IF LPAR expr RPAR stm ( ELSE stm )?
+//    | WHILE LPAR expr RPAR stm
+//    | FOR LPAR expr? SEMICOLON expr? SEMICOLON expr? RPAR stm
+//    | BREAK SEMICOLON
+//    | RETURN expr? SEMICOLON
+//    | expr? SEMICOLON
+
+// stm verifică toate tipurile de instrucțiuni: bloc, if, while, for, break, return sau expresie urmată de punct și virgulă
+int stm()
+{
+    Token *startTk = lastToken;
+    if (stmCompound()) return 1;
+
+    if (consume(IF)) {
+        if (consume(LPAR)) {
+            if (expr()) {
+                if (consume(RPAR)) {
+                    if (stm()) {
+                        if (consume(ELSE)) {
+                            if (!stm()) tkerr(lastToken, "missing statement after else");
+                        }
+                        return 1;
+                    } else tkerr(lastToken, "missing if body");
+                } else tkerr(lastToken, "missing ) after if condition");
+            } else tkerr(lastToken, "invalid expression after (");
+        } else tkerr(lastToken, "missing ( after if");
+    }
+
+    if (consume(WHILE)) {
+        if (consume(LPAR)) {
+            if (expr()) {
+                if (consume(RPAR)) {
+                    if (stm()) return 1;
+                    else tkerr(lastToken, "missing while statement");
+                } else tkerr(lastToken, "missing )");
+            } else tkerr(lastToken, "invalid expression after (");
+        } else tkerr(lastToken, "missing ( after while");
+    }
+
+    if (consume(FOR)) {
+        if (consume(LPAR)) {
+            expr(); 
+            if (consume(SEMICOLON)) {
+                expr();
+                if (consume(SEMICOLON)) {
+                    expr(); 
+                    if (consume(RPAR)) {
+                        if (stm()) return 1;
+                        else tkerr(lastToken, "missing for body");
+                    } else tkerr(lastToken, "missing ) after for");
+                } else tkerr(lastToken, "missing ; in for");
+            } else tkerr(lastToken, "missing ; in for");
+        } else tkerr(lastToken, "missing ( after for");
+    }
+
+    if (consume(BREAK)) {
+        if (consume(SEMICOLON)) return 1;
+        else tkerr(lastToken, "missing ; after break");
+    }
+
+    if (consume(RETURN)) {
+        expr(); // optional
+        if (consume(SEMICOLON)) return 1;
+        else tkerr(lastToken, "missing ; after return");
+    }
+
+    // expr? SEMICOLON
+    {
+        int hasExpr = expr();
+        if (consume(SEMICOLON)) return 1;
+        if (hasExpr) tkerr(lastToken, "missing ; after expression");
+    }
+
+    lastToken = startTk;
+    return 0;
+}
+
+// expr: exprAssign
+// expr pornește analiza expresiilor de la nivelul de atribuire
+// expr este regula generală pentru expresii și începe cu exprAssign
+int expr() { return exprAssign(); }
+
+// exprAssign: exprUnary ASSIGN exprAssign | exprOr
+// exprAssign tratează operatorul de atribuire =
+// Dacă nu este atribuire, merge la exprOr
+int exprAssign()
+{
+    Token *startTk = lastToken;
+    if (exprUnary()) {
+        if (consume(ASSIGN)) {
+            if (exprAssign()) return 1;
+            else tkerr(lastToken, "missing assignment expression");
+        }
+        lastToken = startTk; 
+    }
+    return exprOr();
+}
+
+// elimina left-recursion prin impartirea in 2 expresii:
+// exprOr: exprOr OR exprAnd | exprAnd -> 
+// exprOr: exprAnd exprOr1
+// Verifică expresii cu ||
+// exprOr tratează operatorul logic OR, iar exprOr1 permite mai multe || la rând
+int exprOr() { return exprAnd() ? exprOr1() : 0; }
+// exprOr1: OR exprAnd exprOr1 | epsilon
+// exprOr1 există pentru repetarea operatorului ||
+int exprOr1()
+{
+    if (consume(OR)) {
+        if (exprAnd()) return exprOr1();
+        else tkerr(lastToken, "invalid expression after ||");
+    }
+    return 1;
+}
+
+// Expresiile sunt împărțite pe nivele ca să respecte precedența operatorilor
+// exprAnd verifică expresii cu &&. Mai întâi apelează exprEq, pentru că egalitatea are prioritate mai mare decât &&, 
+// apoi apelează exprAnd1 ca să vadă dacă mai urmează operatori &&
+int exprAnd() { return exprEq() ? exprAnd1() : 0; }
+// exprAnd1 verifică repetările cu &&. Dacă găsește &&, cere o expresie după el. 
+// Dacă nu găsește &&, întoarce 1, adică epsilon — expresia se poate termina aici
+int exprAnd1()
+{
+    if (consume(AND)) {
+        if (exprEq()) return exprAnd1();
+        else tkerr(lastToken, "invalid expression after &&");
+    }
+    return 1;
+}
+
+// exprEq verifică expresii de egalitate, adică == și !=. Începe cu exprRel, pentru că relaționalele au prioritate mai mare
+int exprEq() { return exprRel() ? exprEq1() : 0; }
+// exprEq1 caută operatorii == și !=. Dacă îi găsește, cere o expresie relațională după ei. 
+// Dacă nu îi găsește, întoarce 1, adică nu mai e nimic de analizat la acest nivel
+int exprEq1()
+{
+    if (consume(EQUAL) || consume(NOTEQ)) {
+        if (exprRel()) return exprEq1();
+        else tkerr(lastToken, "invalid expression after == or !=");
+    }
+    return 1;
+}
+
+// exprRel verifică expresii relaționale, cum sunt <, <=, > și >=. Începe cu exprAdd, 
+// pentru că expresiile aritmetice trebuie recunoscute înainte de comparație
+int exprRel() { return exprAdd() ? exprRel1() : 0; }
+// exprRel1 verifică operatorii relaționali. Dacă găsește <, <=, > sau >=, cere o expresie aritmetică după operator
+int exprRel1()
+{
+    if (consume(LESS) || consume(LESSEQ) || consume(GREATER) || consume(GREATEREQ)) {
+        if (exprAdd()) return exprRel1();
+        else tkerr(lastToken, "invalid expression after relational operator");
+    }
+    return 1;
+}
+
+// exprAdd verifică expresii cu + și -. Înainte de asta apelează exprMul, ca să respecte prioritatea lui * și /
+int exprAdd() { return exprMul() ? exprAdd1() : 0; }
+// exprAdd1 verifică repetările cu + și -. Dacă apare un astfel de operator, după el trebuie să urmeze un termen de nivel exprMul
+int exprAdd1()
+{
+    if (consume(ADD) || consume(SUB)) {
+        if (exprMul()) return exprAdd1();
+        else tkerr(lastToken, "invalid expression after + or -");
+    }
+    return 1;
+}
+
+// exprMul verifică expresii cu * și /. Înainte de operatori, citește operandul prin exprCast, care duce mai departe spre expresii mai simple
+int exprMul() { return exprCast() ? exprMul1() : 0; }
+// exprMul1 verifică repetările cu * și /. Dacă găsește operatorul, cere un operand după el
+int exprMul1()
+{
+    if (consume(MUL) || consume(DIV)) {
+        if (exprCast()) return exprMul1();
+        else tkerr(lastToken, "invalid expression after * or /");
+    }
+    return 1;
+}
+
+// exprCast: LPAR typeBase arrayDecl? RPAR exprCast | exprUnary
+// exprCast verifică expresii de conversie de tip
+int exprCast()
+{
+    Token *startTk = lastToken;
+    if (consume(LPAR)) {
+        if (typeBase()) {
+            arrayDecl();
+            if (consume(RPAR)) {
+                if (exprCast()) return 1;
+                else tkerr(lastToken, "missing expression after cast");
+            } else tkerr(lastToken, "missing ) in cast");
+        }
+        lastToken = startTk; 
+    }
+    return exprUnary();
+}
+
+// exprUnary: ( SUB | NOT ) exprUnary | exprPostfix
+// exprUnary tratează minusul unar și negarea logică
+int exprUnary()
+{
+    if (consume(SUB) || consume(NOT)) {
+        if (exprUnary()) return 1;
+        else tkerr(lastToken, "invalid unary expression");
+    }
+    return exprPostfix();
+}
+
+// exprPostfix: exprPrimary exprPostfix1
+// exprPostfix tratează indexarea vectorilor și accesul la câmpuri
+int exprPostfix() { return exprPrimary() ? exprPostfix1() : 0; }
+// exprPostfix1: LBRACKET expr RBRACKET exprPostfix1 | DOT ID exprPostfix1 | epsilon
+int exprPostfix1()
+{
+    if (consume(LBRACKET)) {
+        if (expr()) {
+            if (consume(RBRACKET)) return exprPostfix1();
+            else tkerr(lastToken, "missing ] after array index");
+        } else tkerr(lastToken, "invalid expression after [");
+    }
+    if (consume(DOT)) {
+        if (consume(ID)) return exprPostfix1();
+        else tkerr(lastToken, "missing identifier after .");
+    }
+    return 1; 
+}
+
+// exprPrimary: ID ( LPAR ( expr ( COMMA expr )* )? RPAR )?
+//            | CT_INT | CT_REAL | CT_CHAR | CT_STRING
+//            | LPAR expr RPAR
+// exprPrimary recunoaște cele mai simple expresii: identificatori, apeluri de funcții, constante și expresii între paranteze
+int exprPrimary()
+{
+    Token *startTk = lastToken;
+    if (consume(ID)) {
+        if (consume(LPAR)) {
+            if (expr()) {
+                while (consume(COMMA)) {
+                    if (!expr()) tkerr(lastToken, "missing expression after ,");
+                }
+            }
+            if (!consume(RPAR)) tkerr(lastToken, "missing ) in function call");
+        }
+        return 1;
+    }
+    if (consume(CT_INT)) return 1;
+    if (consume(CT_REAL)) return 1;
+    if (consume(CT_CHAR)) return 1;
+    if (consume(CT_STRING)) return 1;
+    if (consume(LPAR)) {
+        if (expr()) {
+            if (consume(RPAR)) return 1;
+            else tkerr(lastToken, "missing ) in expression");
+        }
+        lastToken = startTk;
+    }
+    return 0;
+}
+
+// unit: ( structDef | fnDef | varDef )* END
+// unit este regula de start a parserului și verifică întreg programul până la finalul fișierului
+int unit()
+{
+    while (1) {
+        if (structDef()) {}
+        else if (fnDef()) {}
+        else if (varDef()) {}
+        else break;
+    }
+    if (!consume(END)) tkerr(lastToken, "expected struct/function/variable definition or end of file");
+    return 1;
+}
+
+// Eliberează memoria ocupată de tokeni
+// Pentru ID și CT_STRING, eliberează și text
+// freeTokens eliberează lista de tokeni și textele alocate dinamic
+static void freeTokens(Token *head)
+{
+    Token *tk = head;
+    while (tk) {
+        Token *next = tk->next;
+        if ((tk->code == ID || tk->code == CT_STRING) && tk->text) {
+            free(tk->text);
+        }
+        free(tk);
+        tk = next;
+    }
+}
+
+// Citește tot fișierul într-un buffer
+// loadFileText citește fișierul sursă în memorie și adaugă \0 la final, ca lexerul să știe unde se termină inputul
+static char *loadFileText(const char *path)
+{
+    FILE *f = fopen(path, "rb");
+    long size;
+    size_t nRead;
+    char *buf;
+
+    if (f == NULL) {
+        err("cannot open `%s`", path);
+    }
+
+    if (fseek(f, 0, SEEK_END) != 0) {
+        fclose(f);
+        err("cannot seek `%s`", path);
+    }
+    size = ftell(f);
+    if (size < 0) {
+        fclose(f);
+        err("cannot get size for `%s`", path);
+    }
+    if (fseek(f, 0, SEEK_SET) != 0) {
+        fclose(f);
+        err("cannot seek `%s`", path);
+    }
+
+    buf = (char *)malloc((size_t)size + 1);
+    if (buf == NULL) {
+        fclose(f);
+        err("not enough memory");
+    }
+
+    nRead = fread(buf, 1, (size_t)size, f);
+    if (ferror(f)) {
+        free(buf);
+        fclose(f);
+        err("cannot read `%s`", path);
+    }
+    buf[nRead] = '\0';
+    fclose(f);
+    return buf;
+}
+
+// Programul primește fișierul de test ca argument
+// main citește fișierul, rulează lexerul, afișează tokenii, apoi rulează parserul cu unit; dacă programul respectă gramatica, afișează syntax OK
+int main(int argc, char **argv)
+{
+    char *ownedInput = NULL;
+
+    if (argc > 1) {
+        ownedInput = loadFileText(argv[1]);
+        pCrtCh = ownedInput;
+    } else {
+        err("usage: AtomC <input_file>");
+    }
+
+    tokens = NULL;
+    lastToken = NULL;
+    line = 1;
+
+    while (getNextToken() != END) {}
+
+    showTokens();
+    lastToken = tokens;
+    unit();
+    printf("syntax OK\n");
+
+    freeTokens(tokens);
+    free(ownedInput);
+    return 0;
+}
